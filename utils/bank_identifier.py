@@ -4,37 +4,22 @@ bank_identifier.py
 Looks at the first 1-2 pages of a bank statement PDF and figures out which
 bank issued it, so main.py can route the file to the correct parser.
 
-Detection strategy: every Indian bank statement carries very distinctive
-boilerplate on page 1 (bank name, IFSC prefix, statement title, etc). We
-just search the raw text for a handful of fingerprints per bank. This is
-far more reliable than trying to guess from layout/table shape.
+This used to own its own hardcoded fingerprint dict (HDFC -> ["HDFC BANK",
+"HDFC0..."], SBI -> [...], etc), separate from the parsers themselves. That
+was a real OCP violation: adding a bank meant editing a fingerprint list
+here AND writing the parser AND registering it in parsers/__init__.py --
+three edits for one new bank, two of which touched shared files.
+
+Now each parser owns its own detection logic via a `matches()` classmethod
+(see parsers/base.py), and this module just asks every registered parser
+"is this yours?" via parsers.identify_and_get_parser(). Adding a bank is a
+single new file; this module never changes again.
 """
 
 from __future__ import annotations
-import re
 import pdfplumber
 
-# Each bank has a list of fingerprint patterns (case-insensitive).
-# If ANY pattern matches the extracted text of the first two pages,
-# we consider it a match. Add new banks here as you add new parsers.
-BANK_FINGERPRINTS = {
-    "HDFC": [
-        r"HDFC BANK",
-        r"HDFC0\d{6}",          # HDFC IFSC codes always start with HDFC0
-    ],
-    "SBI": [
-        r"STATE BANK OF INDIA",
-        r"\bSBIN0\d{6}\b",      # SBI IFSC codes always start with SBIN0
-    ],
-    "ICICI": [
-        r"ICICI BANK",
-        r"\bICIC0\d{6}\b",
-    ],
-    "AXIS": [
-        r"AXIS BANK",
-        r"\bUTIB0\d{6}\b",
-    ],
-}
+from parsers import identify_and_get_parser
 
 
 def _extract_probe_text(pdf_path: str, max_pages: int = 2) -> str:
@@ -49,17 +34,11 @@ def _extract_probe_text(pdf_path: str, max_pages: int = 2) -> str:
 
 def identify_bank(pdf_path: str) -> str:
     """
-    Returns one of: "HDFC", "SBI", "ICICI", "AXIS", or "UNKNOWN".
-
-    Raises no exceptions on unrecognised banks -- callers should handle
-    "UNKNOWN" by returning a clear 400 error to the API user rather than
-    guessing at a parser.
+    Returns the matching bank_name (e.g. "HDFC", "SBI") or "UNKNOWN" if no
+    registered parser recognizes this statement. Raises no exceptions on
+    unrecognized banks -- callers should handle "UNKNOWN" by returning a
+    clear 4xx error rather than guessing at a parser.
     """
     text = _extract_probe_text(pdf_path)
-
-    for bank_name, patterns in BANK_FINGERPRINTS.items():
-        for pattern in patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                return bank_name
-
-    return "UNKNOWN"
+    bank_name, _ = identify_and_get_parser(text)
+    return bank_name or "UNKNOWN"
