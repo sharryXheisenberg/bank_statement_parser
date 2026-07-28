@@ -1,7 +1,18 @@
 """
 main.py
 
-...
+FastAPI entry point. Exposes:
+
+  POST /parse-statement           -> JSON preview of the parsed transactions
+  POST /parse-statement/download  -> the same data as a downloadable .xlsx
+
+Flow for either endpoint:
+  1. Save the uploaded PDF to a temp file.
+  2. utils.bank_identifier.identify_bank() sniffs page 1/2 text to figure
+     out which bank issued it.
+  3. parsers.PARSER_REGISTRY routes to the matching bank-specific parser,
+     which returns a clean pandas DataFrame.
+  4. Return JSON, or write the DataFrame to .xlsx and stream it back.
 
 Run locally with EITHER:
     python main.py
@@ -125,9 +136,9 @@ def _parse(file: UploadFile):
                     f"{', '.join(PARSER_REGISTRY.keys())}."
                 ),
             )
-        build_dataframe = PARSER_REGISTRY[bank]
+        parser = PARSER_REGISTRY[bank]()
         try:
-            df = build_dataframe(pdf_path)
+            df = parser.parse(pdf_path)
         except HTTPException:
             raise
         except Exception as exc:
@@ -200,7 +211,8 @@ async def parse_statement_download(file: UploadFile = File(...)):
         filename=os.path.basename(out_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    
+
+
 if __name__ == "__main__":
     # Lets you run `python main.py` directly instead of typing out the full
     # uvicorn command. Reads PORT from .env / environment, defaults to 8000.
